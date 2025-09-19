@@ -3,6 +3,11 @@ import axios from 'axios';
 import { useAuth } from '../context/AuthContext.jsx';
 
 export default function AdminDashboardPage() {
+  const { token } = useAuth();
+  
+  // Debug: Check if useAuth is working
+  console.log('AdminDashboardPage rendered, token:', token ? 'exists' : 'missing');
+  
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -18,7 +23,6 @@ export default function AdminDashboardPage() {
   const [selectedUserIds, setSelectedUserIds] = useState([]);
   const [assignLoading, setAssignLoading] = useState(false);
   const [assignError, setAssignError] = useState('');
-  const { token } = useAuth();
 
   // Enhanced form state for comprehensive coupon creation
   const [form, setForm] = useState({
@@ -125,49 +129,69 @@ export default function AdminDashboardPage() {
     e.preventDefault();
     setFormError('');
     setFormLoading(true);
-    
+
     try {
-      if (!form.code.trim()) {
-        throw new Error('Coupon code is required');
-      }
+        if (!form.code.trim()) {
+            throw new Error('Coupon code is required');
+        }
 
-      const payload = { 
-        code: form.code.trim(),
-        type: form.isTargeted ? 'INDIVIDUAL' : 'GROUP'
-      };
+        if (form.isTargeted && form.selectedUsers.length === 0) {
+            throw new Error('Please select at least one user for a targeted coupon');
+        }
 
-      if (form.isTargeted) {
-        if (form.timeLimit === 'limited' && form.timeLimitValue) {
-          const multiplier = form.timeLimitUnit === 'minutes' ? 60 * 1000 : 60 * 60 * 1000;
-          payload.expiresAt = new Date(Date.now() + Number(form.timeLimitValue) * multiplier);
+        if (!form.isTargeted && !form.maxUses) {
+            throw new Error('Max uses is required for general coupons');
+        }
+
+        // --- FIX STARTS HERE ---
+        // The payload now includes all necessary fields from the form state.
+        const payload = {
+            code: form.code.trim().toUpperCase(),
+            type: form.isTargeted ? 'INDIVIDUAL' : 'GROUP',
+            description: form.description,
+            applicableAssessments: form.selectedAssessments,
+        };
+        // --- FIX ENDS HERE ---
+
+        if (form.isTargeted) {
+            if (form.timeLimit === 'limited' && form.timeLimitValue) {
+                const multiplier = form.timeLimitUnit === 'minutes' ? 60 * 1000 : 60 * 60 * 1000;
+                payload.expiresAt = new Date(Date.now() + Number(form.timeLimitValue) * multiplier);
+            } else {
+                payload.expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours default
+            }
+            payload.assignedUsers = form.selectedUsers.map(userId => ({ userId }));
         } else {
-          payload.expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+            payload.maxUses = Number(form.maxUses);
         }
-        // FIX: Include assignedUsers for targeted coupons
-        payload.assignedUsers = form.selectedUsers;
-      } else {
-        if (!form.maxUses) {
-          throw new Error('Max uses is required for general coupons');
-        }
-        payload.maxUses = Number(form.maxUses);
-      }
 
-      const response = await axios.post('/api/coupons', payload, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      
-      setShowModal(false);
-      resetForm();
-      
-      const res = await axios.get('/api/coupons', { 
-        headers: { Authorization: `Bearer ${token}` } 
-      });
-      setCoupons(res.data);
-      
+        console.log('Creating coupon with payload:', payload);
+
+        const response = await axios.post('/api/coupons', payload, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+        });
+
+        console.log('Coupon created successfully:', response.data);
+
+        setShowModal(false);
+        resetForm();
+
+        const res = await axios.get('/api/coupons', {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        setCoupons(res.data);
+
+        alert(`Coupon "${response.data.code}" created successfully!`);
+
     } catch (err) {
-      setFormError(err.response?.data?.message || err.message || 'Failed to create coupon');
+        console.error('Error creating coupon:', err);
+        const errorMessage = err.response?.data?.message || err.message || 'Failed to create coupon';
+        setFormError(errorMessage);
     } finally {
-      setFormLoading(false);
+        setFormLoading(false);
     }
   };
 
@@ -226,14 +250,18 @@ export default function AdminDashboardPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-mentorify-cream via-white to-mentorify-cream p-4 lg:p-8">
-      <div className="max-w-7xl mx-auto space-y-8">
-        {/* Admin Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">
-            Admin <span className="text-mentorify-orange">Dashboard</span>
-          </h1>
-          <p className="text-gray-600 text-lg">Manage users and coupons efficiently</p>
-        </div>
+      {/* Admin Header */}
+      <div className="text-center mb-8">
+        <h1 className="text-4xl font-bold text-gray-900 mb-2">
+          Admin <span className="text-mentorify-orange">Dashboard</span>
+        </h1>
+        <p className="text-gray-600 text-lg">Manage users and coupons efficiently</p>
+      </div>
+
+      <div className="max-w-7xl mx-auto">
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+          {/* Left Side - Main Dashboard Content */}
+          <div className="xl:col-span-2 space-y-8">
 
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
@@ -356,13 +384,6 @@ export default function AdminDashboardPage() {
                 <h2 className="text-2xl font-bold text-white">Coupon Management</h2>
                 <p className="text-blue-100 mt-1">Create and manage coupon codes for assessments</p>
               </div>
-              <button 
-                onClick={() => setShowModal(true)}
-                className="bg-white bg-opacity-20 hover:bg-opacity-30 text-white px-6 py-3 rounded-lg font-semibold transition-all duration-200 backdrop-blur-sm flex items-center space-x-2"
-              >
-                <span>➕</span>
-                <span>Create Coupon</span>
-              </button>
             </div>
           </div>
 
@@ -389,6 +410,16 @@ export default function AdminDashboardPage() {
               >
                 Inactive Coupons ({coupons.filter(c => c.status === 'INACTIVE').length})
               </button>
+              <button
+                className={`flex-1 px-4 py-2 rounded-md font-semibold transition-all duration-200 ${
+                  couponTab === 'EXPIRED' 
+                    ? 'bg-mentorify-orange text-white shadow-md' 
+                    : 'text-gray-600 hover:text-gray-800'
+                }`}
+                onClick={() => setCouponTab('EXPIRED')}
+              >
+                Unused Coupons ({coupons.filter(c => c.uses === 0 || !c.uses).length})
+              </button>
             </div>
 
             {/* Coupon List */}
@@ -408,7 +439,12 @@ export default function AdminDashboardPage() {
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {coupons.filter(c => c.status === couponTab).map(coupon => (
+                {coupons.filter(c => {
+                  if (couponTab === 'EXPIRED') {
+                    return c.uses === 0 || !c.uses;
+                  }
+                  return c.status === couponTab;
+                }).map(coupon => (
                   <div key={coupon._id} className="group bg-white border border-gray-200 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 overflow-hidden">
                     <div className={`h-2 ${coupon.status === 'ACTIVE' ? 'bg-gradient-to-r from-green-400 to-green-500' : 'bg-gradient-to-r from-gray-400 to-gray-500'}`}></div>
                     
@@ -474,128 +510,176 @@ export default function AdminDashboardPage() {
           </div>
         </div>
 
-        {/* Create Coupon Modal */}
-        {showModal && (
-          <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md relative overflow-hidden">
-              <div className="bg-gradient-to-r from-mentorify-blue to-blue-500 px-6 py-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xl font-bold text-white">Create New Coupon</h3>
-                  <button 
-                    onClick={() => setShowModal(false)}
-                    className="text-white hover:text-gray-200 text-2xl font-bold transition-colors"
-                  >
-                    ×
-                  </button>
+          </div>
+
+          {/* Right Side - Coupon Creation Sidebar */}
+          <div className="xl:col-span-1">
+            <div className="sticky top-8">
+              <div className="bg-white rounded-2xl shadow-xl overflow-hidden border-2 border-green-200">
+                <div className="bg-gradient-to-r from-green-500 to-emerald-600 px-6 py-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-xl font-bold text-white">Create Coupon</h2>
+                      <p className="text-green-100 text-sm mt-1">Quick coupon creation</p>
+                    </div>
+                    <div className="text-white text-2xl">🎫</div>
+                  </div>
                 </div>
-              </div>
-              
-              <div className="p-6">
-                {formError && (
-                  <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-                    <p className="text-red-600 text-sm">{formError}</p>
-                  </div>
-                )}
                 
-                <form onSubmit={handleCreateCoupon} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Coupon Code</label>
-                    <input 
-                      name="code" 
-                      value={form.code} 
-                      onChange={handleFormChange} 
-                      placeholder="Enter coupon code" 
-                      required 
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-mentorify-blue focus:border-transparent transition-all duration-200"
-                    />
-                  </div>
+                <div className="p-6">
+                  {formError && (
+                    <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                      <p className="text-red-600 text-sm font-medium">{formError}</p>
+                    </div>
+                  )}
                   
-                  <div>
-                    <label className="flex items-center space-x-2">
+                  <form onSubmit={handleCreateCoupon} className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Coupon Code *</label>
                       <input
-                        type="checkbox"
-                        name="isTargeted"
-                        checked={form.isTargeted}
+                        name="code"
+                        value={form.code}
                         onChange={handleFormChange}
-                        className="h-4 w-4 text-mentorify-blue focus:ring-mentorify-blue border-gray-300 rounded"
+                        placeholder="e.g., STUDENT2024"
+                        required
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm"
                       />
-                      <span className="text-sm font-medium text-gray-700">Target specific users</span>
-                    </label>
-                  </div>
-                  
-                  {form.isTargeted && (
+                    </div>
+
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Time Limit</label>
-                      <select 
-                        name="timeLimit" 
-                        value={form.timeLimit} 
-                        onChange={handleFormChange} 
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-mentorify-blue focus:border-transparent transition-all duration-200"
-                      >
-                        <option value="no-limit">No Time Limit (24 hours default)</option>
-                        <option value="limited">Set Time Limit</option>
-                      </select>
-                      
-                      {form.timeLimit === 'limited' && (
-                        <div className="grid grid-cols-2 gap-3 mt-3">
-                          <input 
-                            name="timeLimitValue" 
-                            value={form.timeLimitValue} 
-                            onChange={handleFormChange} 
-                            placeholder="Duration" 
-                            type="number" 
-                            min="1" 
-                            className="px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-mentorify-blue focus:border-transparent"
-                          />
-                          <select 
-                            name="timeLimitUnit" 
-                            value={form.timeLimitUnit} 
-                            onChange={handleFormChange} 
-                            className="px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-mentorify-blue focus:border-transparent"
-                          >
-                            <option value="minutes">Minutes</option>
-                            <option value="hours">Hours</option>
-                          </select>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
+                      <textarea
+                        name="description"
+                        value={form.description}
+                        onChange={handleFormChange}
+                        placeholder="Brief description"
+                        rows="2"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="flex items-center space-x-2 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          name="isTargeted"
+                          checked={form.isTargeted}
+                          onChange={handleFormChange}
+                          className="h-4 w-4 text-green-500 focus:ring-green-500 border-gray-300 rounded"
+                        />
+                        <div>
+                          <span className="text-sm font-medium text-gray-900">Target specific users</span>
+                          <p className="text-xs text-gray-500">Individual coupons</p>
                         </div>
-                      )}
+                      </label>
                     </div>
-                  )}
-                  
-                  {!form.isTargeted && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Maximum Uses</label>
-                      <input 
-                        name="maxUses" 
-                        value={form.maxUses} 
-                        onChange={handleFormChange} 
-                        placeholder="e.g., 100" 
-                        type="number" 
-                        min="1" 
-                        required={!form.isTargeted}
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-mentorify-blue focus:border-transparent transition-all duration-200"
-                      />
-                    </div>
-                  )}
-                  
-                  <button 
-                    type="submit" 
-                    disabled={formLoading}
-                    className="w-full bg-mentorify-blue hover:bg-blue-600 disabled:bg-gray-400 text-white font-bold py-3 px-6 rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl"
-                  >
-                    {formLoading ? (
-                      <div className="flex items-center justify-center space-x-2">
-                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                        <span>Creating...</span>
+                    
+                    {form.isTargeted ? (
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Select Users *</label>
+                          <div className="border border-gray-200 rounded-lg p-3 max-h-40 overflow-y-auto bg-gray-50">
+                            <div className="text-xs text-gray-600 mb-2">Selected: {form.selectedUsers.length}</div>
+                            <div className="space-y-1">
+                              {users.map(user => (
+                                <label key={user._id} className="flex items-center p-2 bg-white hover:bg-blue-50 cursor-pointer rounded border text-xs">
+                                  <input
+                                    type="checkbox"
+                                    checked={form.selectedUsers.includes(user._id)}
+                                    onChange={() => handleUserSelection(user._id)}
+                                    className="mr-2 h-3 w-3 text-green-500 focus:ring-green-500 border-gray-300 rounded"
+                                  />
+                                  <div className="flex items-center space-x-2">
+                                    <div className="w-5 h-5 rounded-full bg-gradient-to-br from-green-400 to-emerald-500 flex items-center justify-center text-white font-bold text-xs">
+                                      {user.name.charAt(0).toUpperCase()}
+                                    </div>
+                                    <div>
+                                      <div className="font-medium text-gray-900">{user.name}</div>
+                                    </div>
+                                  </div>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Time Limit</label>
+                          <select
+                            name="timeLimit"
+                            value={form.timeLimit}
+                            onChange={handleFormChange}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm"
+                          >
+                            <option value="no-limit">24 hours (default)</option>
+                            <option value="limited">Custom limit</option>
+                          </select>
+                          {form.timeLimit === 'limited' && (
+                            <div className="grid grid-cols-2 gap-2 mt-2">
+                              <input
+                                name="timeLimitValue"
+                                value={form.timeLimitValue}
+                                onChange={handleFormChange}
+                                placeholder="Duration"
+                                type="number"
+                                min="1"
+                                required={form.timeLimit === 'limited'}
+                                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm"
+                              />
+                              <select
+                                name="timeLimitUnit"
+                                value={form.timeLimitUnit}
+                                onChange={handleFormChange}
+                                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm"
+                              >
+                                <option value="minutes">Minutes</option>
+                                <option value="hours">Hours</option>
+                              </select>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     ) : (
-                      'Create Coupon'
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Maximum Uses *</label>
+                        <input
+                          name="maxUses"
+                          value={form.maxUses}
+                          onChange={handleFormChange}
+                          placeholder="e.g., 100"
+                          type="number"
+                          min="1"
+                          required={!form.isTargeted}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Total usage limit</p>
+                      </div>
                     )}
-                  </button>
-                </form>
+                    
+                    <button
+                      type="submit"
+                      disabled={formLoading || (form.isTargeted && form.selectedUsers.length === 0)}
+                      className="w-full py-3 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 disabled:from-gray-400 disabled:to-gray-500 text-white font-bold rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105 disabled:transform-none"
+                    >
+                      {formLoading ? (
+                        <div className="flex items-center justify-center space-x-2">
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          <span>Creating...</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center space-x-2">
+                          <span>🎫</span>
+                          <span>Create Coupon</span>
+                        </div>
+                      )}
+                    </button>
+                  </form>
+                </div>
               </div>
             </div>
           </div>
-        )}
+        </div>
+      </div>
 
         {/* Coupon Details Modal */}
         {selectedCoupon && (
@@ -660,7 +744,7 @@ export default function AdminDashboardPage() {
                             <div key={au.userId} className="flex justify-between items-center p-3 border-b last:border-b-0">
                               <span className="font-medium">{user ? user.name : au.userId}</span>
                               <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-                                au.status === 'PENDING' ? 'bg-yellow-100 text-yellow-800' : 
+                                au.status === 'SENT' ? 'bg-yellow-100 text-yellow-800' : 
                                 au.status === 'REDEEMED' ? 'bg-green-100 text-green-800' : 
                                 'bg-gray-100 text-gray-800'
                               }`}>
