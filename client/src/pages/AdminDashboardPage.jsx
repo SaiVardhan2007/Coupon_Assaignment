@@ -11,7 +11,6 @@ export default function AdminDashboardPage() {
   const [couponLoading, setCouponLoading] = useState(false);
   const [couponError, setCouponError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState({ code: '', type: 'INDIVIDUAL', expires: '', maxUses: '' });
   const [formError, setFormError] = useState('');
   const [formLoading, setFormLoading] = useState(false);
   const [selectedCoupon, setSelectedCoupon] = useState(null);
@@ -20,6 +19,27 @@ export default function AdminDashboardPage() {
   const [assignLoading, setAssignLoading] = useState(false);
   const [assignError, setAssignError] = useState('');
   const { token } = useAuth();
+
+  // Enhanced form state for comprehensive coupon creation
+  const [form, setForm] = useState({
+    code: '',
+    isTargeted: false,
+    selectedUsers: [],
+    maxUses: '',
+    timeLimit: 'no-limit',
+    timeLimitValue: '',
+    timeLimitUnit: 'hours',
+    selectedAssessments: [],
+    description: ''
+  });
+
+  const availableAssessments = [
+    { id: 'stream-finder', name: 'Stream Finder', color: '#ff6b6b' },
+    { id: 'career-finder', name: 'Career Finder', color: '#4ecdc4' },
+    { id: 'personality-assessment', name: 'Personality Assessment', color: '#45b7d1' },
+    { id: 'skills-evaluation', name: 'Skills Evaluation', color: '#96ceb4' },
+    { id: 'interest-profiler', name: 'Interest Profiler', color: '#feca57' }
+  ];
 
   useEffect(() => {
     const fetchUsers = async () => {
@@ -67,36 +87,102 @@ export default function AdminDashboardPage() {
   };
 
   const handleFormChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
+    const { name, value, type, checked } = e.target;
+    setForm(prev => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : value
+    }));
+  };
+
+  const handleUserSelection = (userId) => {
+    setForm(prev => ({
+      ...prev,
+      selectedUsers: prev.selectedUsers.includes(userId)
+        ? prev.selectedUsers.filter(id => id !== userId)
+        : [...prev.selectedUsers, userId]
+    }));
+  };
+
+  const handleAssessmentSelection = (assessmentId) => {
+    setForm(prev => ({
+      ...prev,
+      selectedAssessments: prev.selectedAssessments.includes(assessmentId)
+        ? prev.selectedAssessments.filter(id => id !== assessmentId)
+        : [...prev.selectedAssessments, assessmentId]
+    }));
+  };
+
+  const selectAllAssessments = () => {
+    setForm(prev => ({
+      ...prev,
+      selectedAssessments: prev.selectedAssessments.length === availableAssessments.length
+        ? []
+        : availableAssessments.map(a => a.id)
+    }));
   };
 
   const handleCreateCoupon = async (e) => {
     e.preventDefault();
     setFormError('');
     setFormLoading(true);
+    
     try {
-      const payload = { code: form.code, type: form.type };
-      if (form.type === 'INDIVIDUAL') {
-        if (!form.expires) throw new Error('Expiration required');
-        const expiresAt = new Date(Date.now() + Number(form.expires) * 60 * 60 * 1000);
-        payload.expiresAt = expiresAt;
-      } else if (form.type === 'GROUP') {
-        if (!form.maxUses) throw new Error('Max Uses required');
+      if (!form.code.trim()) {
+        throw new Error('Coupon code is required');
+      }
+
+      const payload = { 
+        code: form.code.trim(),
+        type: form.isTargeted ? 'INDIVIDUAL' : 'GROUP'
+      };
+
+      if (form.isTargeted) {
+        if (form.timeLimit === 'limited' && form.timeLimitValue) {
+          const multiplier = form.timeLimitUnit === 'minutes' ? 60 * 1000 : 60 * 60 * 1000;
+          payload.expiresAt = new Date(Date.now() + Number(form.timeLimitValue) * multiplier);
+        } else {
+          payload.expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        }
+        // FIX: Include assignedUsers for targeted coupons
+        payload.assignedUsers = form.selectedUsers;
+      } else {
+        if (!form.maxUses) {
+          throw new Error('Max uses is required for general coupons');
+        }
         payload.maxUses = Number(form.maxUses);
       }
-      await axios.post('/api/coupons', payload, {
+
+      const response = await axios.post('/api/coupons', payload, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      
       setShowModal(false);
-      setForm({ code: '', type: 'INDIVIDUAL', expires: '', maxUses: '' });
-      // Refresh coupons
-      const res = await axios.get('/api/coupons', { headers: { Authorization: `Bearer ${token}` } });
+      resetForm();
+      
+      const res = await axios.get('/api/coupons', { 
+        headers: { Authorization: `Bearer ${token}` } 
+      });
       setCoupons(res.data);
+      
     } catch (err) {
       setFormError(err.response?.data?.message || err.message || 'Failed to create coupon');
     } finally {
       setFormLoading(false);
     }
+  };
+
+  const resetForm = () => {
+    setForm({
+      code: '',
+      isTargeted: false,
+      selectedUsers: [],
+      maxUses: '',
+      timeLimit: 'no-limit',
+      timeLimitValue: '',
+      timeLimitUnit: 'hours',
+      selectedAssessments: [],
+      description: ''
+    });
   };
 
   const openCouponDetails = (coupon) => {
@@ -139,197 +225,549 @@ export default function AdminDashboardPage() {
   };
 
   return (
-    <div className="p-4">
-      <h2 className="text-2xl font-bold mb-4">All Users</h2>
-      {loading ? (
-        <div>Loading...</div>
-      ) : error ? (
-        <div className="text-red-500">{error}</div>
-      ) : (
-        <div className="overflow-x-auto mb-8">
-          <table className="min-w-full bg-white border rounded shadow">
-            <thead>
-              <tr>
-                <th className="px-4 py-2 border">Name</th>
-                <th className="px-4 py-2 border">Email</th>
-                <th className="px-4 py-2 border">Phone Number</th>
-                <th className="px-4 py-2 border">Current Studies</th>
-                <th className="px-4 py-2 border">City</th>
-                <th className="px-4 py-2 border">State</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((user) => (
-                <tr key={user._id}>
-                  <td className="px-4 py-2 border">{user.name}</td>
-                  <td className="px-4 py-2 border">{user.email}</td>
-                  <td className="px-4 py-2 border">{user.phoneNumber || '-'}</td>
-                  <td className="px-4 py-2 border">{user.currentStudies || '-'}</td>
-                  <td className="px-4 py-2 border">{user.city || '-'}</td>
-                  <td className="px-4 py-2 border">{user.state || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <div className="min-h-screen bg-gradient-to-br from-mentorify-cream via-white to-mentorify-cream p-4 lg:p-8">
+      <div className="max-w-7xl mx-auto space-y-8">
+        {/* Admin Header */}
+        <div className="text-center mb-8">
+          <h1 className="text-4xl font-bold text-gray-900 mb-2">
+            Admin <span className="text-mentorify-orange">Dashboard</span>
+          </h1>
+          <p className="text-gray-600 text-lg">Manage users and coupons efficiently</p>
         </div>
-      )}
 
-      {/* Coupon Management Section */}
-      <div className="mb-8">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-2xl font-bold">Coupon Management</h2>
-          <button className="bg-green-600 text-white px-4 py-2 rounded" onClick={() => setShowModal(true)}>Create New Coupon</button>
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+          <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-mentorify-orange">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Total Users</p>
+                <p className="text-2xl font-bold text-gray-900">{users.length}</p>
+              </div>
+              <div className="text-3xl">👥</div>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-mentorify-blue">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Active Coupons</p>
+                <p className="text-2xl font-bold text-gray-900">{coupons.filter(c => c.status === 'ACTIVE').length}</p>
+              </div>
+              <div className="text-3xl">🎫</div>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-green-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Total Redemptions</p>
+                <p className="text-2xl font-bold text-gray-900">{coupons.reduce((sum, c) => sum + (c.uses || 0), 0)}</p>
+              </div>
+              <div className="text-3xl">✅</div>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-purple-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Inactive Coupons</p>
+                <p className="text-2xl font-bold text-gray-900">{coupons.filter(c => c.status === 'INACTIVE').length}</p>
+              </div>
+              <div className="text-3xl">⏸️</div>
+            </div>
+          </div>
         </div>
-        {/* Modal for creating coupon */}
+
+        {/* User Management Card */}
+        <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
+          <div className="bg-gradient-to-r from-mentorify-orange to-orange-400 px-8 py-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-white">User Management</h2>
+                <p className="text-orange-100 mt-1">View and manage all registered users</p>
+              </div>
+              <div className="text-white text-3xl">👥</div>
+            </div>
+          </div>
+          
+          <div className="p-8">
+            {loading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="flex items-center space-x-3">
+                  <div className="w-6 h-6 border-2 border-mentorify-orange border-t-transparent rounded-full animate-spin"></div>
+                  <span className="text-gray-600 font-medium">Loading users...</span>
+                </div>
+              </div>
+            ) : error ? (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <div className="flex items-center space-x-2">
+                  <div className="text-red-500 text-xl">⚠️</div>
+                  <p className="text-red-600 font-medium">{error}</p>
+                </div>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full">
+                  <thead>
+                    <tr className="border-b border-gray-200">
+                      <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700 uppercase tracking-wider">User Info</th>
+                      <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700 uppercase tracking-wider">Contact</th>
+                      <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700 uppercase tracking-wider">Education</th>
+                      <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700 uppercase tracking-wider">Location</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {users.map((user) => (
+                      <tr key={user._id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-mentorify-orange to-orange-400 flex items-center justify-center text-white font-bold">
+                              {user.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                              <div className="text-sm font-semibold text-gray-900">{user.name}</div>
+                              <div className="text-sm text-gray-500">{user.email}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm text-gray-900">{user.phoneNumber || '-'}</div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div>
+                            <div className="text-sm font-medium text-gray-900">Class {user.currentStudies || '-'}</div>
+                            <div className="text-sm text-gray-500">{user.school || 'School not specified'}</div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm text-gray-900">{user.city || '-'}, {user.state || '-'}</div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Coupon Management Card */}
+        <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
+          <div className="bg-gradient-to-r from-mentorify-blue to-blue-500 px-8 py-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-white">Coupon Management</h2>
+                <p className="text-blue-100 mt-1">Create and manage coupon codes for assessments</p>
+              </div>
+              <button 
+                onClick={() => setShowModal(true)}
+                className="bg-white bg-opacity-20 hover:bg-opacity-30 text-white px-6 py-3 rounded-lg font-semibold transition-all duration-200 backdrop-blur-sm flex items-center space-x-2"
+              >
+                <span>➕</span>
+                <span>Create Coupon</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="p-8">
+            {/* Coupon Tabs */}
+            <div className="flex mb-6 bg-gray-100 rounded-lg p-1">
+              <button
+                className={`flex-1 px-4 py-2 rounded-md font-semibold transition-all duration-200 ${
+                  couponTab === 'ACTIVE' 
+                    ? 'bg-mentorify-orange text-white shadow-md' 
+                    : 'text-gray-600 hover:text-gray-800'
+                }`}
+                onClick={() => setCouponTab('ACTIVE')}
+              >
+                Active Coupons ({coupons.filter(c => c.status === 'ACTIVE').length})
+              </button>
+              <button
+                className={`flex-1 px-4 py-2 rounded-md font-semibold transition-all duration-200 ${
+                  couponTab === 'INACTIVE' 
+                    ? 'bg-mentorify-orange text-white shadow-md' 
+                    : 'text-gray-600 hover:text-gray-800'
+                }`}
+                onClick={() => setCouponTab('INACTIVE')}
+              >
+                Inactive Coupons ({coupons.filter(c => c.status === 'INACTIVE').length})
+              </button>
+            </div>
+
+            {/* Coupon List */}
+            {couponLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="flex items-center space-x-3">
+                  <div className="w-6 h-6 border-2 border-mentorify-blue border-t-transparent rounded-full animate-spin"></div>
+                  <span className="text-gray-600 font-medium">Loading coupons...</span>
+                </div>
+              </div>
+            ) : couponError ? (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <div className="flex items-center space-x-2">
+                  <div className="text-red-500 text-xl">⚠️</div>
+                  <p className="text-red-600 font-medium">{couponError}</p>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {coupons.filter(c => c.status === couponTab).map(coupon => (
+                  <div key={coupon._id} className="group bg-white border border-gray-200 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 overflow-hidden">
+                    <div className={`h-2 ${coupon.status === 'ACTIVE' ? 'bg-gradient-to-r from-green-400 to-green-500' : 'bg-gradient-to-r from-gray-400 to-gray-500'}`}></div>
+                    
+                    <div className="p-6">
+                      <div className="flex items-start justify-between mb-4">
+                        <div>
+                          <h3 className="text-lg font-bold text-gray-900 mb-1">{coupon.code}</h3>
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                            coupon.type === 'INDIVIDUAL' 
+                              ? 'bg-blue-100 text-blue-800' 
+                              : 'bg-purple-100 text-purple-800'
+                          }`}>
+                            {coupon.type}
+                          </span>
+                        </div>
+                        <div className="text-2xl">
+                          {coupon.type === 'INDIVIDUAL' ? '👤' : '👥'}
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 mb-4">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600">Uses:</span>
+                          <span className="font-semibold text-gray-900">{coupon.uses || 0}</span>
+                        </div>
+                        {coupon.type === 'GROUP' && (
+                          <div className="flex justify-between text-sm">
+                            <span className="text-gray-600">Max Uses:</span>
+                            <span className="font-semibold text-gray-900">{coupon.maxUses || '-'}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600">Status:</span>
+                          <span className={`font-semibold ${coupon.status === 'ACTIVE' ? 'text-green-600' : 'text-gray-500'}`}>
+                            {coupon.status}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => handleToggleStatus(coupon._id)}
+                          className={`flex-1 px-4 py-2 rounded-lg font-semibold transition-all duration-200 ${
+                            coupon.status === 'ACTIVE' 
+                              ? 'bg-red-500 hover:bg-red-600 text-white' 
+                              : 'bg-green-500 hover:bg-green-600 text-white'
+                          }`}
+                        >
+                          {coupon.status === 'ACTIVE' ? 'Deactivate' : 'Activate'}
+                        </button>
+                        <button
+                          onClick={() => openCouponDetails(coupon)}
+                          className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-semibold transition-all duration-200"
+                        >
+                          Details
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Create Coupon Modal */}
         {showModal && (
-          <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-40 z-50">
-            <div className="bg-white p-6 rounded shadow w-full max-w-md relative">
-              <button className="absolute top-2 right-2 text-gray-500" onClick={() => setShowModal(false)}>&times;</button>
-              <h3 className="text-xl font-bold mb-4">Create New Coupon</h3>
-              {formError && <div className="mb-2 text-red-500">{formError}</div>}
-              <form onSubmit={handleCreateCoupon} className="space-y-4">
-                <input name="code" value={form.code} onChange={handleFormChange} placeholder="Coupon Code" required className="w-full p-2 border rounded" />
-                <select name="type" value={form.type} onChange={handleFormChange} className="w-full p-2 border rounded">
-                  <option value="INDIVIDUAL">INDIVIDUAL</option>
-                  <option value="GROUP">GROUP</option>
-                </select>
-                {form.type === 'INDIVIDUAL' && (
-                  <input name="expires" value={form.expires} onChange={handleFormChange} placeholder="Expiration (in hours)" type="number" min="1" className="w-full p-2 border rounded" required />
+          <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md relative overflow-hidden">
+              <div className="bg-gradient-to-r from-mentorify-blue to-blue-500 px-6 py-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xl font-bold text-white">Create New Coupon</h3>
+                  <button 
+                    onClick={() => setShowModal(false)}
+                    className="text-white hover:text-gray-200 text-2xl font-bold transition-colors"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+              
+              <div className="p-6">
+                {formError && (
+                  <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <p className="text-red-600 text-sm">{formError}</p>
+                  </div>
                 )}
-                {form.type === 'GROUP' && (
-                  <input name="maxUses" value={form.maxUses} onChange={handleFormChange} placeholder="Max Uses" type="number" min="1" className="w-full p-2 border rounded" required />
-                )}
-                <button type="submit" className="w-full bg-blue-600 text-white p-2 rounded" disabled={formLoading}>{formLoading ? 'Creating...' : 'Create Coupon'}</button>
-              </form>
+                
+                <form onSubmit={handleCreateCoupon} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Coupon Code</label>
+                    <input 
+                      name="code" 
+                      value={form.code} 
+                      onChange={handleFormChange} 
+                      placeholder="Enter coupon code" 
+                      required 
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-mentorify-blue focus:border-transparent transition-all duration-200"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        name="isTargeted"
+                        checked={form.isTargeted}
+                        onChange={handleFormChange}
+                        className="h-4 w-4 text-mentorify-blue focus:ring-mentorify-blue border-gray-300 rounded"
+                      />
+                      <span className="text-sm font-medium text-gray-700">Target specific users</span>
+                    </label>
+                  </div>
+                  
+                  {form.isTargeted && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Time Limit</label>
+                      <select 
+                        name="timeLimit" 
+                        value={form.timeLimit} 
+                        onChange={handleFormChange} 
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-mentorify-blue focus:border-transparent transition-all duration-200"
+                      >
+                        <option value="no-limit">No Time Limit (24 hours default)</option>
+                        <option value="limited">Set Time Limit</option>
+                      </select>
+                      
+                      {form.timeLimit === 'limited' && (
+                        <div className="grid grid-cols-2 gap-3 mt-3">
+                          <input 
+                            name="timeLimitValue" 
+                            value={form.timeLimitValue} 
+                            onChange={handleFormChange} 
+                            placeholder="Duration" 
+                            type="number" 
+                            min="1" 
+                            className="px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-mentorify-blue focus:border-transparent"
+                          />
+                          <select 
+                            name="timeLimitUnit" 
+                            value={form.timeLimitUnit} 
+                            onChange={handleFormChange} 
+                            className="px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-mentorify-blue focus:border-transparent"
+                          >
+                            <option value="minutes">Minutes</option>
+                            <option value="hours">Hours</option>
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {!form.isTargeted && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Maximum Uses</label>
+                      <input 
+                        name="maxUses" 
+                        value={form.maxUses} 
+                        onChange={handleFormChange} 
+                        placeholder="e.g., 100" 
+                        type="number" 
+                        min="1" 
+                        required={!form.isTargeted}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-mentorify-blue focus:border-transparent transition-all duration-200"
+                      />
+                    </div>
+                  )}
+                  
+                  <button 
+                    type="submit" 
+                    disabled={formLoading}
+                    className="w-full bg-mentorify-blue hover:bg-blue-600 disabled:bg-gray-400 text-white font-bold py-3 px-6 rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl"
+                  >
+                    {formLoading ? (
+                      <div className="flex items-center justify-center space-x-2">
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span>Creating...</span>
+                      </div>
+                    ) : (
+                      'Create Coupon'
+                    )}
+                  </button>
+                </form>
+              </div>
             </div>
           </div>
         )}
-        <div className="flex mb-4">
-          <button
-            className={`px-4 py-2 rounded-l ${couponTab === 'ACTIVE' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
-            onClick={() => setCouponTab('ACTIVE')}
-          >
-            Active Coupons
-          </button>
-          <button
-            className={`px-4 py-2 rounded-r ${couponTab === 'INACTIVE' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
-            onClick={() => setCouponTab('INACTIVE')}
-          >
-            Inactive Coupons
-          </button>
-        </div>
-        {couponLoading ? (
-          <div>Loading coupons...</div>
-        ) : couponError ? (
-          <div className="text-red-500">{couponError}</div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {coupons.filter(c => c.status === couponTab).map(coupon => (
-              <div key={coupon._id} className="border rounded shadow p-4 bg-white flex flex-col cursor-pointer" onClick={() => openCouponDetails(coupon)}>
-                <div className="font-bold text-lg mb-2">{coupon.code}</div>
-                <div className="mb-1">Type: <span className="font-semibold">{coupon.type}</span></div>
-                <div className="mb-1">Uses: <span className="font-semibold">{coupon.uses || 0}</span></div>
-                {coupon.type === 'GROUP' && (
-                  <div className="mb-1">Max Uses: <span className="font-semibold">{coupon.maxUses || '-'}</span></div>
+
+        {/* Coupon Details Modal */}
+        {selectedCoupon && (
+          <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl relative overflow-hidden">
+              <div className="bg-gradient-to-r from-mentorify-orange to-orange-400 px-6 py-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xl font-bold text-white">Coupon Details</h3>
+                  <button 
+                    onClick={closeCouponDetails}
+                    className="text-white hover:text-gray-200 text-2xl font-bold transition-colors"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+              
+              <div className="p-6">
+                <div className="grid grid-cols-2 gap-4 mb-6">
+                  <div className="bg-gray-50 p-4 rounded-lg">
+                    <div className="text-sm text-gray-600 mb-1">Code</div>
+                    <div className="font-bold text-lg">{selectedCoupon.code}</div>
+                  </div>
+                  <div className="bg-gray-50 p-4 rounded-lg">
+                    <div className="text-sm text-gray-600 mb-1">Type</div>
+                    <div className="font-bold text-lg">{selectedCoupon.type}</div>
+                  </div>
+                  <div className="bg-gray-50 p-4 rounded-lg">
+                    <div className="text-sm text-gray-600 mb-1">Status</div>
+                    <div className={`font-bold text-lg ${selectedCoupon.status === 'ACTIVE' ? 'text-green-600' : 'text-gray-500'}`}>
+                      {selectedCoupon.status}
+                    </div>
+                  </div>
+                  <div className="bg-gray-50 p-4 rounded-lg">
+                    <div className="text-sm text-gray-600 mb-1">Uses</div>
+                    <div className="font-bold text-lg">{selectedCoupon.uses || 0}</div>
+                  </div>
+                  {selectedCoupon.type === 'GROUP' && (
+                    <div className="bg-gray-50 p-4 rounded-lg col-span-2">
+                      <div className="text-sm text-gray-600 mb-1">Max Uses</div>
+                      <div className="font-bold text-lg">{selectedCoupon.maxUses || '-'}</div>
+                    </div>
+                  )}
+                </div>
+
+                {selectedCoupon.type === 'INDIVIDUAL' && (
+                  <div>
+                    <div className="flex items-center justify-between mb-4">
+                      <h4 className="text-lg font-semibold text-gray-900">Assigned Users</h4>
+                      <button 
+                        onClick={() => setShowAssignModal(true)}
+                        className="bg-mentorify-blue hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold transition-all duration-200"
+                      >
+                        Assign Users
+                      </button>
+                    </div>
+                    <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
+                      {selectedCoupon.assignedUsers && selectedCoupon.assignedUsers.length > 0 ? (
+                        selectedCoupon.assignedUsers.map(au => {
+                          const user = users.find(u => u._id === (au.userId?._id || au.userId));
+                          return (
+                            <div key={au.userId} className="flex justify-between items-center p-3 border-b last:border-b-0">
+                              <span className="font-medium">{user ? user.name : au.userId}</span>
+                              <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                                au.status === 'PENDING' ? 'bg-yellow-100 text-yellow-800' : 
+                                au.status === 'REDEEMED' ? 'bg-green-100 text-green-800' : 
+                                'bg-gray-100 text-gray-800'
+                              }`}>
+                                {au.status}
+                              </span>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="p-6 text-center text-gray-500">No users assigned yet.</div>
+                      )}
+                    </div>
+                  </div>
                 )}
+
+                {selectedCoupon.type === 'GROUP' && (
+                  <div>
+                    <h4 className="text-lg font-semibold text-gray-900 mb-4">Redeemed By</h4>
+                    <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
+                      {selectedCoupon.redeemedBy && selectedCoupon.redeemedBy.length > 0 ? (
+                        selectedCoupon.redeemedBy.map(uid => {
+                          const user = users.find(u => u._id === (uid._id || uid));
+                          return (
+                            <div key={uid} className="flex items-center p-3 border-b last:border-b-0">
+                              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-mentorify-orange to-orange-400 flex items-center justify-center text-white font-bold text-sm mr-3">
+                                {user ? user.name.charAt(0).toUpperCase() : '?'}
+                              </div>
+                              <span className="font-medium">{user ? user.name : uid}</span>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="p-6 text-center text-gray-500">No redemptions yet.</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Assign Users Modal */}
+        {showAssignModal && (
+          <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md relative overflow-hidden">
+              <div className="bg-gradient-to-r from-mentorify-blue to-blue-500 px-6 py-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xl font-bold text-white">Assign Users</h3>
+                  <button 
+                    onClick={() => setShowAssignModal(false)}
+                    className="text-white hover:text-gray-200 text-2xl font-bold transition-colors"
+                  >
+                    ×
+                  </button>
+                </div>
+                <p className="text-blue-100 text-sm mt-1">Select users to assign this coupon</p>
+              </div>
+              
+              <div className="p-6">
+                {assignError && (
+                  <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <p className="text-red-600 text-sm">{assignError}</p>
+                  </div>
+                )}
+                
+                <div className="max-h-64 overflow-y-auto mb-6 border border-gray-200 rounded-lg">
+                  {users.map(user => (
+                    <label key={user._id} className="flex items-center p-3 hover:bg-gray-50 cursor-pointer border-b last:border-b-0">
+                      <input
+                        type="checkbox"
+                        checked={selectedUserIds.includes(user._id)}
+                        onChange={() => handleUserCheckbox(user._id)}
+                        className="mr-3 h-4 w-4 text-mentorify-blue focus:ring-mentorify-blue border-gray-300 rounded"
+                      />
+                      <div className="flex items-center space-x-3">
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-mentorify-orange to-orange-400 flex items-center justify-center text-white font-bold text-sm">
+                          {user.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <div className="font-medium text-gray-900">{user.name}</div>
+                          <div className="text-sm text-gray-500">{user.email}</div>
+                        </div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+                
                 <button
-                  className={`mt-2 px-3 py-1 rounded ${coupon.status === 'ACTIVE' ? 'bg-red-500 text-white' : 'bg-green-600 text-white'}`}
-                  onClick={e => { e.stopPropagation(); handleToggleStatus(coupon._id); }}
+                  onClick={handleAssignUsers}
+                  disabled={assignLoading || selectedUserIds.length === 0}
+                  className="w-full bg-mentorify-blue hover:bg-blue-600 disabled:bg-gray-400 text-white font-bold py-3 px-6 rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl"
                 >
-                  {coupon.status === 'ACTIVE' ? 'Deactivate' : 'Activate'}
+                  {assignLoading ? (
+                    <div className="flex items-center justify-center space-x-2">
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <span>Assigning...</span>
+                    </div>
+                  ) : (
+                    `Assign to ${selectedUserIds.length} User${selectedUserIds.length !== 1 ? 's' : ''}`
+                  )}
                 </button>
               </div>
-            ))}
+            </div>
           </div>
         )}
       </div>
-
-      {/* Coupon Details Modal */}
-      {selectedCoupon && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-40 z-50">
-          <div className="bg-white p-6 rounded shadow w-full max-w-lg relative">
-            <button className="absolute top-2 right-2 text-gray-500" onClick={closeCouponDetails}>&times;</button>
-            <h3 className="text-xl font-bold mb-4">Coupon Details</h3>
-            <div className="mb-2"><b>Code:</b> {selectedCoupon.code}</div>
-            <div className="mb-2"><b>Type:</b> {selectedCoupon.type}</div>
-            <div className="mb-2"><b>Status:</b> {selectedCoupon.status}</div>
-            <div className="mb-2"><b>Uses:</b> {selectedCoupon.uses || 0}</div>
-            {selectedCoupon.type === 'GROUP' && (
-              <div className="mb-2"><b>Max Uses:</b> {selectedCoupon.maxUses || '-'}</div>
-            )}
-            {selectedCoupon.type === 'INDIVIDUAL' && (
-              <>
-                <button className="mb-4 bg-blue-600 text-white px-4 py-2 rounded" onClick={() => setShowAssignModal(true)}>Assign to Users</button>
-                <div className="mb-2 font-semibold">Assigned Users:</div>
-                <ul className="mb-4 max-h-32 overflow-y-auto">
-                  {selectedCoupon.assignedUsers && selectedCoupon.assignedUsers.length > 0 ? (
-                    selectedCoupon.assignedUsers.map(au => {
-                      const user = users.find(u => u._id === (au.userId?._id || au.userId));
-                      return (
-                        <li key={au.userId} className="flex justify-between items-center border-b py-1">
-                          <span>{user ? user.name : au.userId}</span>
-                          <span className="text-xs px-2 py-1 rounded bg-gray-200 ml-2">{au.status}</span>
-                        </li>
-                      );
-                    })
-                  ) : (
-                    <li className="text-gray-500">No users assigned.</li>
-                  )}
-                </ul>
-              </>
-            )}
-            {selectedCoupon.type === 'GROUP' && (
-              <>
-                <div className="mb-2 font-semibold">Redeemed By:</div>
-                <ul className="mb-4 max-h-32 overflow-y-auto">
-                  {selectedCoupon.redeemedBy && selectedCoupon.redeemedBy.length > 0 ? (
-                    selectedCoupon.redeemedBy.map(uid => {
-                      const user = users.find(u => u._id === (uid._id || uid));
-                      return (
-                        <li key={uid} className="flex justify-between items-center border-b py-1">
-                          <span>{user ? user.name : uid}</span>
-                        </li>
-                      );
-                    })
-                  ) : (
-                    <li className="text-gray-500">No users have redeemed this coupon.</li>
-                  )}
-                </ul>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-      {/* Assign Users Modal */}
-      {showAssignModal && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-40 z-50">
-          <div className="bg-white p-6 rounded shadow w-full max-w-md relative">
-            <button className="absolute top-2 right-2 text-gray-500" onClick={() => setShowAssignModal(false)}>&times;</button>
-            <h3 className="text-xl font-bold mb-4">Assign Coupon to Users</h3>
-            {assignError && <div className="mb-2 text-red-500">{assignError}</div>}
-            <div className="max-h-64 overflow-y-auto mb-4">
-              {users.map(user => (
-                <label key={user._id} className="flex items-center mb-2">
-                  <input
-                    type="checkbox"
-                    checked={selectedUserIds.includes(user._id)}
-                    onChange={() => handleUserCheckbox(user._id)}
-                    className="mr-2"
-                  />
-                  {user.name} <span className="ml-2 text-xs text-gray-500">({user.email})</span>
-                </label>
-              ))}
-            </div>
-            <button
-              className="w-full bg-blue-600 text-white p-2 rounded"
-              onClick={handleAssignUsers}
-              disabled={assignLoading || selectedUserIds.length === 0}
-            >
-              {assignLoading ? 'Assigning...' : 'Assign Selected Users'}
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
